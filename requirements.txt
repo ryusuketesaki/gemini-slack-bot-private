@@ -1,0 +1,6 @@
+slack-bolt
+google-generativeai
+boto3
+aws-lambda-powertools
+requests>=2.31.0
+markdown_to_mrkdwn>=0.2.0
