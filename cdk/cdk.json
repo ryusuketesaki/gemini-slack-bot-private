@@ -1,5 +1,5 @@
 {
-  "app": "npx ts-node --prefer-ts-exts bin/cdk.ts",
+  "app": "npx ts-node --prefer-ts-exts bin/app.ts",
   "watch": {
     "include": [
       "**"
@@ -17,6 +17,20 @@
     ]
   },
   "context": {
+    "cloudfront": {
+      "distribution": {
+        "enabled": true,
+        "defaultRootObject": "",
+        "priceClass": "PriceClass_100",
+        "httpVersion": "http2",
+        "functionAssociations": {
+          "development": {
+            "functionName": "GeminiSlackBotFunction",
+            "eventType": "VIEWER_REQUEST"
+          }
+        }
+      }
+    },
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,
     "@aws-cdk/core:target-partitions": [

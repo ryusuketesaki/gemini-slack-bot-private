@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import boto3
-from datetime import datetime
+from datetime import datetime, timedelta
 import google.generativeai as genai
 from slack_bolt import App
 from slack_bolt.adapter.aws_lambda import SlackRequestHandler
@@ -33,12 +33,20 @@ model = genai.GenerativeModel('gemini-2.0-flash')
 app = App(token=SLACK_BOT_TOKEN, process_before_response=True)
 
 def check_api_limit() -> bool:
-    today = datetime.now().strftime('%Y-%m-%d')
+    now = datetime.now()
+    today = now.strftime('%Y-%m-%d')
+    # 翌日の0時0分0秒のUNIXタイムスタンプを計算
+    tomorrow = datetime(now.year, now.month, now.day) + timedelta(days=1)
+    ttl = int(tomorrow.timestamp())
+
     try:
         response = usage_table.update_item(
             Key={'date': today},
-            UpdateExpression='ADD usage_count :inc',
-            ExpressionAttributeValues={':inc': 1},
+            UpdateExpression='ADD usage_count :inc SET ttl = if_not_exists(ttl, :ttl)',
+            ExpressionAttributeValues={
+                ':inc': 1,
+                ':ttl': ttl
+            },
             ReturnValues='UPDATED_NEW'
         )
         current_count = response['Attributes']['usage_count']
@@ -97,12 +105,96 @@ def handle_mention(event, say):
 slack_handler = SlackRequestHandler(app=app)
 
 def handler(event, context):
-    response = slack_handler.handle(event, context)
+    try:
+        logger.info(f"Received event: {json.dumps(event)}")
+        logger.info(f"Request headers: {event.get('headers', {})}")
 
-    return {
-        'statusCode': response.get('statusCode', 200),
-        'body': json.dumps(response.get('body', {})),
-        'headers': {
-            'Content-Type': 'application/json'
+        # OPTIONSリクエストの処理
+        if event.get('httpMethod') == 'OPTIONS':
+            logger.info("Handling OPTIONS request")
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                    'Access-Control-Allow-Headers': 'Content-Type, X-Slack-Signature, X-Slack-Request-Timestamp'
+                },
+                'body': ''
+            }
+
+        # URLの検証リクエストの処理
+        if event.get('body'):
+            try:
+                body = (
+                    json.loads(event['body'])
+                    if isinstance(event['body'], str)
+                    else event['body']
+                )
+                logger.info(f"Parsed body: {json.dumps(body)}")
+
+                # URL検証チャレンジの処理
+                if body.get('type') == 'url_verification':
+                    logger.info("Handling URL verification challenge")
+                    challenge = body.get('challenge')
+                    if not challenge:
+                        logger.error("Challenge token not found in request")
+                        return {
+                            'statusCode': 400,
+                            'body': json.dumps({'error': 'Challenge token not found'}),
+                            'headers': {
+                                'Content-Type': 'application/json',
+                                'Access-Control-Allow-Origin': '*'
+                            }
+                        }
+
+                    return {
+                        'statusCode': 200,
+                        'body': json.dumps({'challenge': challenge}),
+                        'headers': {
+                            'Content-Type': 'application/json',
+                            'Access-Control-Allow-Origin': '*',
+                            'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                            'Access-Control-Allow-Headers': 'Content-Type, X-Slack-Signature, X-Slack-Request-Timestamp'
+                        }
+                    }
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse request body: {e}")
+                return {
+                    'statusCode': 400,
+                    'body': json.dumps({'error': 'Invalid JSON in request body'}),
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    }
+                }
+
+        # 通常のイベント処理
+        logger.info("Handling regular event")
+        response = slack_handler.handle(event, context)
+        logger.info(f"Slack handler response: {json.dumps(response)}")
+
+        # レスポンスヘッダーの追加
+        headers = {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, X-Slack-Signature, X-Slack-Request-Timestamp'
         }
-    }
+
+        return {
+            'statusCode': response.get('statusCode', 200),
+            'body': json.dumps(response.get('body', {})),
+            'headers': headers
+        }
+
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}", exc_info=True)
+        return {
+            'statusCode': 500,
+            'body': json.dumps({'error': 'Internal server error'}),
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            }
+        }

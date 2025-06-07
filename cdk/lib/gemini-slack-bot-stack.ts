@@ -17,6 +17,13 @@ export class GeminiSlackBotStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    // Lambdaレイヤーの作成
+    const dependenciesLayer = new lambda.LayerVersion(this, 'DependenciesLayer', {
+      code: lambda.Code.fromAsset('../src/lambda_layer.zip'),
+      compatibleRuntimes: [lambda.Runtime.PYTHON_3_9],
+      description: 'Dependencies for the bot function',
+    });
+
     // Lambda関数
     const botFunction = new lambda.Function(this, 'BotFunction', {
       runtime: lambda.Runtime.PYTHON_3_9,
@@ -24,6 +31,7 @@ export class GeminiSlackBotStack extends cdk.Stack {
       code: lambda.Code.fromAsset('../src'),
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
+      layers: [dependenciesLayer],
       environment: {
         SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN!,
         SLACK_APP_TOKEN: process.env.SLACK_APP_TOKEN!,
@@ -46,13 +54,28 @@ export class GeminiSlackBotStack extends cdk.Stack {
     });
 
     // CloudFront
+    const cloudfrontConfig = this.node.tryGetContext('cloudfront');
     const distribution = new cloudfront.Distribution(this, 'BotDistribution', {
       defaultBehavior: {
-        origin: new origins.HttpOrigin(functionUrl.url.split('//')[1]),
+        origin: new origins.FunctionUrlOrigin(functionUrl),
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
-        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
-      }
+        originRequestPolicy: new cloudfront.OriginRequestPolicy(this, 'SlackRequestPolicy', {
+          headerBehavior: cloudfront.OriginRequestHeaderBehavior.allowList(
+            'content-type',
+            'x-slack-signature',
+            'x-slack-request-timestamp'
+          ),
+          queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.none(),
+          cookieBehavior: cloudfront.OriginRequestCookieBehavior.none(),
+        }),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+        responseHeadersPolicy: cloudfront.ResponseHeadersPolicy.CORS_ALLOW_ALL_ORIGINS
+      },
+      enabled: cloudfrontConfig.distribution.enabled,
+      defaultRootObject: cloudfrontConfig.distribution.defaultRootObject,
+      priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
+      httpVersion: cloudfrontConfig.distribution.httpVersion
     });
 
     // 出力

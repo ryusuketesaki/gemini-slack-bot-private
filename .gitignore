@@ -32,6 +32,8 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+**/lambda_layer/
+**/lambda_layer.zip
 
 # Environment
 .env
